@@ -20,14 +20,14 @@ if not all([GEMINI_API_KEY, SENDER_EMAIL, GMAIL_APP_PASSWORD, RECEIVER_EMAIL]):
 
 HISTORY_FILE = "sent_history.json"
 
-# Initialize official Google GenAI Client
+# Initialize Google GenAI Client
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ---------------------------------------------------------------------------
 # 2. History & De-duplication Engine
 # ---------------------------------------------------------------------------
 def load_sent_history():
-    """Loads previously sent article PMIDs/URLs to prevent duplicate alerts."""
+    """Loads previously sent article PMIDs to prevent duplicate alerts."""
     if os.path.exists(HISTORY_FILE):
         try:
             with open(HISTORY_FILE, "r", encoding="utf-8") as f:
@@ -147,7 +147,7 @@ def generate_digest_html(articles):
     - Do NOT include markdown code blocks or ```html markers.
     """
 
-    # Updated model string to gemini-3.6-flash
+    # Model endpoint updated to gemini-3.6-flash
     response = client.models.generate_content(
         model="gemini-3.6-flash",
         contents=prompt,
