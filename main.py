@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import random
 import requests
 import smtplib
@@ -49,7 +50,7 @@ def save_sent_history(history_set):
 SEARCH_QUERIES = [
     "calcium supplementation osteoporosis management",
     "coral calcium OR eggshell calcium OR synthetic calcium",
-    "bisphosphonates osteoporosis calcium therapy",
+    "bisphonates osteoporosis calcium therapy",
     "calcium carbonate vs citrate bone density",
     "calcium bioavailability bone mineral density",
     "postmenopausal osteoporosis calcium vitamin d",
@@ -63,9 +64,8 @@ def fetch_from_pubmed(sent_history, candidate_pool):
     random.shuffle(random_queries)
 
     for query in random_queries:
-        # Step through older pages if recent ones are already in history
         for offset in range(0, 200, 25):
-            search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+            search_url = "[https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi](https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi)"
             params = {
                 "db": "pubmed",
                 "term": query,
@@ -82,7 +82,7 @@ def fetch_from_pubmed(sent_history, candidate_pool):
                 if not new_ids:
                     continue
 
-                summary_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+                summary_url = "[https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi](https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi)"
                 summary_params = {
                     "db": "pubmed",
                     "id": ",".join(new_ids),
@@ -103,7 +103,7 @@ def fetch_from_pubmed(sent_history, candidate_pool):
                                 "date": meta.get('pubdate', 'N/A'),
                                 "authors": ", ".join([a.get('name', '') for a in meta.get('authors', [])[:3]]),
                                 "journal": meta.get('source', 'Scientific Journal'),
-                                "link": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+                                "link": f"[https://pubmed.ncbi.nlm.nih.gov/](https://pubmed.ncbi.nlm.nih.gov/){pmid}/"
                             }
                 if len(candidate_pool) >= 15:
                     return
@@ -114,7 +114,7 @@ def fetch_from_europe_pmc(sent_history, candidate_pool):
     """Fetches unique articles from Europe PMC."""
     print("Searching Europe PMC...")
     for query in SEARCH_QUERIES:
-        search_url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+        search_url = "[https://www.ebi.ac.uk/europepmc/webservices/rest/search](https://www.ebi.ac.uk/europepmc/webservices/rest/search)"
         params = {
             "query": f"{query} SORT_DATE:y",
             "format": "json",
@@ -137,7 +137,7 @@ def fetch_from_europe_pmc(sent_history, candidate_pool):
                         "date": item.get('firstPublicationDate', 'N/A'),
                         "authors": item.get('authorString', 'N/A')[:60],
                         "journal": item.get('journalTitle', 'Europe PMC Journal'),
-                        "link": f"https://europepmc.org/article/MED/{art_id}" if str(art_id).isdigit() else f"https://doi.org/{art_id}"
+                        "link": f"[https://europepmc.org/article/MED/](https://europepmc.org/article/MED/){art_id}" if str(art_id).isdigit() else f"[https://doi.org/](https://doi.org/){art_id}"
                     }
             if len(candidate_pool) >= 20:
                 return
@@ -149,7 +149,7 @@ def fetch_from_crossref(sent_history, candidate_pool):
     print("Searching Crossref API...")
     headers = {"User-Agent": "MedicalResearchAgent/1.0 (mailto:admin@example.com)"}
     for query in SEARCH_QUERIES:
-        search_url = "https://api.crossref.org/works"
+        search_url = "[https://api.crossref.org/works](https://api.crossref.org/works)"
         params = {
             "query": query,
             "filter": "type:journal-article",
@@ -180,7 +180,7 @@ def fetch_from_crossref(sent_history, candidate_pool):
                         "date": pub_date,
                         "authors": "Various Authors",
                         "journal": item.get('container-title', ['Scientific Journal'])[0] if item.get('container-title') else 'Scientific Journal',
-                        "link": f"https://doi.org/{doi}"
+                        "link": f"[https://doi.org/](https://doi.org/){doi}"
                     }
             if len(candidate_pool) >= 25:
                 return
@@ -208,10 +208,10 @@ def collect_exact_10_articles(sent_history):
     return final_10
 
 # ---------------------------------------------------------------------------
-# 5. Gemini 3.6 Flash Email Generator
+# 5. Robust Digest Generator with Retries & Fallback (Fixes 503 Errors)
 # ---------------------------------------------------------------------------
 def generate_digest_html(articles):
-    """Generates structured HTML digest using Gemini 3.6 Flash."""
+    """Generates clean HTML digest with automatic retry handling for 503 high-demand errors."""
     articles_payload = json.dumps(articles, indent=2)
 
     prompt = f"""
@@ -232,17 +232,28 @@ def generate_digest_html(articles):
     - Do NOT wrap response in markdown code blocks like ```html.
     """
 
-    response = client.models.generate_content(
-        model="gemini-3.6-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=0.3,
-            max_output_tokens=3000
-        )
-    )
+    models_to_try = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
+    
+    for model_name in models_to_try:
+        for attempt in range(1, 4):
+            try:
+                print(f"Attempting digest generation with {model_name} (Attempt {attempt})...")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.3,
+                        max_output_tokens=3000
+                    )
+                )
+                clean_html = response.text.replace("```html", "").replace("```", "").strip()
+                return clean_html
+            except Exception as e:
+                print(f"Notice: Model {model_name} attempt {attempt} returned: {e}")
+                if attempt < 3:
+                    time.sleep(5)  # Pause 5s to allow API server demand spikes to settle
 
-    clean_html = response.text.replace("```html", "").replace("```", "").strip()
-    return clean_html
+    raise RuntimeError("All Gemini models are currently busy. Please retry in a few minutes.")
 
 # ---------------------------------------------------------------------------
 # 6. Email Dispatch Engine
@@ -272,7 +283,7 @@ if __name__ == "__main__":
     print("Fetching 10 unique, unsent articles across PubMed, Europe PMC, and Crossref...")
     articles = collect_exact_10_articles(sent_history)
 
-    print("Generating AI email digest with gemini-3.6-flash...")
+    print("Generating AI email digest...")
     html_digest = generate_digest_html(articles)
 
     print("Sending email...")
