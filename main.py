@@ -145,7 +145,7 @@ def fetch_from_europe_pmc(sent_history, candidate_pool):
             print(f"Europe PMC notice: {e}")
 
 def fetch_from_crossref(sent_history, candidate_pool):
-    """Fetches unique journal articles from Crossref (clean raw URL)."""
+    """Fetches unique journal articles from Crossref."""
     print("Searching Crossref API...")
     headers = {"User-Agent": "MedicalResearchAgent/1.0 (mailto:admin@example.com)"}
     search_url = "https://api.crossref.org/works"
@@ -189,7 +189,7 @@ def fetch_from_crossref(sent_history, candidate_pool):
             print(f"Crossref notice: {e}")
 
 # ---------------------------------------------------------------------------
-# 4. Master Data Assembler (Guarantees Exactly 10 Articles Every Run)
+# 4. Master Data Assembler (Guarantees Exactly 10 Articles)
 # ---------------------------------------------------------------------------
 def collect_exact_10_articles(sent_history):
     candidate_pool = {}
@@ -209,10 +209,10 @@ def collect_exact_10_articles(sent_history):
     return final_10
 
 # ---------------------------------------------------------------------------
-# 5. Robust Digest Generator with Retries & Active Models
+# 5. Robust Digest Generator (Using Active Models)
 # ---------------------------------------------------------------------------
 def generate_digest_html(articles):
-    """Generates clean HTML digest with active fallback models and exponential retry delays."""
+    """Generates clean HTML digest using currently supported active Gemini models."""
     articles_payload = json.dumps(articles, indent=2)
 
     prompt = f"""
@@ -233,11 +233,12 @@ def generate_digest_html(articles):
     - Do NOT wrap response in markdown code blocks like ```html.
     """
 
-    # Valid active Gemini models
+    # Active supported models
     models_to_try = [
-        "gemini-3.6-flash",
-        "gemini-2.5-flash",
-        "gemini-2.5-pro"
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.6-flash"
     ]
     
     for model_name in models_to_try:
@@ -252,21 +253,24 @@ def generate_digest_html(articles):
                         max_output_tokens=3000
                     )
                 )
-                clean_html = response.text.replace("```html", "").replace("```", "").strip()
-                return clean_html
+                if response.text and len(response.text.strip()) > 50:
+                    clean_html = response.text.replace("```html", "").replace("```", "").strip()
+                    return clean_html
             except Exception as e:
-                print(f"Notice: Model {model_name} attempt {attempt} returned: {e}")
+                print(f"Notice: Model {model_name} attempt {attempt} returned error: {e}")
                 if attempt < 3:
-                    sleep_time = attempt * 12  # Exponential backoff (12s, 24s)
-                    time.sleep(sleep_time)
+                    time.sleep(attempt * 10)  # Pause to clear demand spikes
 
-    raise RuntimeError("All Gemini models are currently busy. Please retry in a few minutes.")
+    raise RuntimeError("All Gemini API models failed to return content.")
 
 # ---------------------------------------------------------------------------
 # 6. Email Dispatch Engine
 # ---------------------------------------------------------------------------
 def send_email(html_content):
     """Delivers HTML digest to recipient email address(es)."""
+    if not html_content or len(html_content.strip()) < 50:
+        raise ValueError("Cannot send empty or invalid email content!")
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = "Daily Medical Digest: Calcium Supplements & Osteoporosis Management"
     msg["From"] = SENDER_EMAIL
