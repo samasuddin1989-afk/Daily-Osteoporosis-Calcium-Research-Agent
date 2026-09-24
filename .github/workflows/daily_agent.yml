@@ -1,0 +1,41 @@
+name: Daily Osteoporosis & Calcium Research Agent
+
+on:
+  schedule:
+    # 06:00 UTC = 12:00 PM Bangladesh Standard Time (GMT+6)
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Enables manual run button in GitHub UI
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Allows workflow to save updated sent_history.json back to repo
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Execute Research Agent
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+        run: python main.py
+
+      - name: Commit and Push Updated Article History
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add sent_history.json
+          git commit -m "Auto-update sent article history [skip ci]" || echo "No changes to commit"
+          git push
