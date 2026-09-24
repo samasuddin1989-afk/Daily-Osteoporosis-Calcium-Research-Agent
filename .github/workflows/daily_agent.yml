@@ -2,19 +2,21 @@ name: Daily Osteoporosis & Calcium Research Agent
 
 on:
   schedule:
-    # 06:00 UTC = 12:00 PM Bangladesh Standard Time (GMT+6)
-    - cron: '0 6 * * *'
-  workflow_dispatch: # Enables manual run button in GitHub UI
+    # 05:00 UTC = 11:00 AM Bangladesh Standard Time (GMT+6)
+    - cron: '0 5 * * *'
+  workflow_dispatch: # Allows UNLIMITED manual runs anytime via the GitHub UI
 
 jobs:
   run-agent:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Allows workflow to save updated sent_history.json back to repo
+      contents: write # Grants permission to update sent_history.json
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -36,6 +38,8 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main || true
           git add sent_history.json
-          git commit -m "Auto-update sent article history [skip ci]" || echo "No changes to commit"
-          git push
+          # [skip ci] prevents GitHub Actions from triggering a duplicate run on this commit
+          git commit -m "Auto-update sent article history [skip ci]" || echo "No history changes to commit"
+          git push origin main
