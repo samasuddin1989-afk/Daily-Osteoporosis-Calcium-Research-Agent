@@ -123,7 +123,7 @@ def fetch_unique_pubmed_articles(sent_history, target_count=10):
     return selected_articles, new_pmids
 
 # ---------------------------------------------------------------------------
-# 4. Summarization via Gemini 2.5 Flash
+# 4. Summarization via Gemini 3.6 Flash
 # ---------------------------------------------------------------------------
 def generate_digest_html(articles):
     """Generates a clean HTML research digest using Google GenAI SDK."""
@@ -144,11 +144,12 @@ def generate_digest_html(articles):
 
     Requirements:
     - Output ONLY valid raw HTML (start with `<div>` or `<html>`).
-    - Do NOT include markdown code blocks or ```html tags.
+    - Do NOT include markdown code blocks or ```html markers.
     """
 
+    # Updated model string to gemini-3.6-flash
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
         contents=prompt,
         config=types.GenerateContentConfig(
             temperature=0.3,
@@ -163,7 +164,7 @@ def generate_digest_html(articles):
 # 5. Email Delivery Function
 # ---------------------------------------------------------------------------
 def send_email(html_content):
-    """Delivers HTML digest via Gmail SMTP."""
+    """Delivers HTML digest to recipient(s) via Gmail SMTP."""
     msg = MIMEMultipart("alternative")
     msg["Subject"] = " Daily Medical Digest: Calcium Supplements & Osteoporosis Management"
     msg["From"] = SENDER_EMAIL
@@ -171,9 +172,11 @@ def send_email(html_content):
 
     msg.attach(MIMEText(html_content, "html"))
 
+    recipients = [email.strip() for email in RECEIVER_EMAIL.split(",") if email.strip()]
+
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(SENDER_EMAIL, GMAIL_APP_PASSWORD)
-        server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
+        server.sendmail(SENDER_EMAIL, recipients, msg.as_string())
 
 # ---------------------------------------------------------------------------
 # 6. Main Execution Pipeline
@@ -188,7 +191,7 @@ if __name__ == "__main__":
     if not articles:
         print("No new unique articles found.")
     else:
-        print(f"Retrieved {len(articles)} new articles. Generating AI digest...")
+        print(f"Retrieved {len(articles)} new articles. Generating AI digest with gemini-3.6-flash...")
         html_digest = generate_digest_html(articles)
 
         print("Sending email...")
