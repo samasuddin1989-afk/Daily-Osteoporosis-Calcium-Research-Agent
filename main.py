@@ -45,12 +45,12 @@ def save_sent_history(history_set):
         json.dump(list(history_set), f, indent=2)
 
 # ---------------------------------------------------------------------------
-# 3. Multi-Repository Ingestion Engine
+# 3. Multi-Repository Ingestion Engine (PubMed, Europe PMC, Crossref)
 # ---------------------------------------------------------------------------
 SEARCH_QUERIES = [
     "calcium supplementation osteoporosis management",
     "coral calcium OR eggshell calcium OR synthetic calcium",
-    "bisphonates osteoporosis calcium therapy",
+    "bisphosphonates osteoporosis calcium therapy",
     "calcium carbonate vs citrate bone density",
     "calcium bioavailability bone mineral density",
     "postmenopausal osteoporosis calcium vitamin d",
@@ -65,7 +65,7 @@ def fetch_from_pubmed(sent_history, candidate_pool):
 
     for query in random_queries:
         for offset in range(0, 200, 25):
-            search_url = "[https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi](https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi)"
+            search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
             params = {
                 "db": "pubmed",
                 "term": query,
@@ -82,7 +82,7 @@ def fetch_from_pubmed(sent_history, candidate_pool):
                 if not new_ids:
                     continue
 
-                summary_url = "[https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi](https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi)"
+                summary_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
                 summary_params = {
                     "db": "pubmed",
                     "id": ",".join(new_ids),
@@ -103,7 +103,7 @@ def fetch_from_pubmed(sent_history, candidate_pool):
                                 "date": meta.get('pubdate', 'N/A'),
                                 "authors": ", ".join([a.get('name', '') for a in meta.get('authors', [])[:3]]),
                                 "journal": meta.get('source', 'Scientific Journal'),
-                                "link": f"[https://pubmed.ncbi.nlm.nih.gov/](https://pubmed.ncbi.nlm.nih.gov/){pmid}/"
+                                "link": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
                             }
                 if len(candidate_pool) >= 15:
                     return
@@ -114,7 +114,7 @@ def fetch_from_europe_pmc(sent_history, candidate_pool):
     """Fetches unique articles from Europe PMC."""
     print("Searching Europe PMC...")
     for query in SEARCH_QUERIES:
-        search_url = "[https://www.ebi.ac.uk/europepmc/webservices/rest/search](https://www.ebi.ac.uk/europepmc/webservices/rest/search)"
+        search_url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
         params = {
             "query": f"{query} SORT_DATE:y",
             "format": "json",
@@ -137,7 +137,7 @@ def fetch_from_europe_pmc(sent_history, candidate_pool):
                         "date": item.get('firstPublicationDate', 'N/A'),
                         "authors": item.get('authorString', 'N/A')[:60],
                         "journal": item.get('journalTitle', 'Europe PMC Journal'),
-                        "link": f"[https://europepmc.org/article/MED/](https://europepmc.org/article/MED/){art_id}" if str(art_id).isdigit() else f"[https://doi.org/](https://doi.org/){art_id}"
+                        "link": f"https://europepmc.org/article/MED/{art_id}" if str(art_id).isdigit() else f"https://doi.org/{art_id}"
                     }
             if len(candidate_pool) >= 20:
                 return
@@ -145,11 +145,12 @@ def fetch_from_europe_pmc(sent_history, candidate_pool):
             print(f"Europe PMC notice: {e}")
 
 def fetch_from_crossref(sent_history, candidate_pool):
-    """Fetches unique journal articles from Crossref."""
+    """Fetches unique journal articles from Crossref (clean raw URL)."""
     print("Searching Crossref API...")
     headers = {"User-Agent": "MedicalResearchAgent/1.0 (mailto:admin@example.com)"}
+    search_url = "https://api.crossref.org/works"
+
     for query in SEARCH_QUERIES:
-        search_url = "[https://api.crossref.org/works](https://api.crossref.org/works)"
         params = {
             "query": query,
             "filter": "type:journal-article",
@@ -180,7 +181,7 @@ def fetch_from_crossref(sent_history, candidate_pool):
                         "date": pub_date,
                         "authors": "Various Authors",
                         "journal": item.get('container-title', ['Scientific Journal'])[0] if item.get('container-title') else 'Scientific Journal',
-                        "link": f"[https://doi.org/](https://doi.org/){doi}"
+                        "link": f"https://doi.org/{doi}"
                     }
             if len(candidate_pool) >= 25:
                 return
@@ -188,7 +189,7 @@ def fetch_from_crossref(sent_history, candidate_pool):
             print(f"Crossref notice: {e}")
 
 # ---------------------------------------------------------------------------
-# 4. Master Data Assembler (Guarantees Exactly 10 Articles)
+# 4. Master Data Assembler (Guarantees Exactly 10 Articles Every Run)
 # ---------------------------------------------------------------------------
 def collect_exact_10_articles(sent_history):
     candidate_pool = {}
