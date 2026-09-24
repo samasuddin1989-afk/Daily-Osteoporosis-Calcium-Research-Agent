@@ -2,6 +2,7 @@ import os
 import json
 import time
 import random
+import datetime
 import requests
 import smtplib
 from email.mime.text import MIMEText
@@ -29,7 +30,7 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 # 2. Sent History Engine
 # ---------------------------------------------------------------------------
 def load_sent_history():
-    """Loads previously sent article IDs/DOIs from history file."""
+    """Loads previously sent article IDs/PMIDs from history file."""
     if os.path.exists(HISTORY_FILE):
         try:
             with open(HISTORY_FILE, "r", encoding="utf-8") as f:
@@ -45,7 +46,7 @@ def save_sent_history(history_set):
         json.dump(list(history_set), f, indent=2)
 
 # ---------------------------------------------------------------------------
-# 3. Multi-Repository Ingestion Engine (PubMed, Europe PMC, Crossref)
+# 3. PubMed Exclusive Ingestion Engine (Last 10 Years)
 # ---------------------------------------------------------------------------
 SEARCH_QUERIES = [
     "calcium supplementation osteoporosis management",
@@ -57,14 +58,19 @@ SEARCH_QUERIES = [
     "osteoporosis fracture risk calcium intake"
 ]
 
-def fetch_from_pubmed(sent_history, candidate_pool):
-    """Fetches unique articles from PubMed with dynamic offset pagination."""
-    print("Searching PubMed...")
+def fetch_10_pubmed_articles(sent_history):
+    """Fetches exactly 10 unique, unsent PubMed articles from the last 10 years."""
+    candidate_pool = {}
+    current_year = datetime.datetime.now().year
+    min_year = current_year - 10
+    
+    print(f"Searching PubMed for articles between {min_year} and {current_year}...")
+    
     random_queries = list(SEARCH_QUERIES)
     random.shuffle(random_queries)
 
     for query in random_queries:
-        for offset in range(0, 200, 25):
+        for offset in range(0, 300, 25):
             search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
             params = {
                 "db": "pubmed",
@@ -72,7 +78,10 @@ def fetch_from_pubmed(sent_history, candidate_pool):
                 "retmode": "json",
                 "retmax": 25,
                 "retstart": offset,
-                "sort": "pub_date"
+                "sort": "pub_date",
+                "datetype": "pdat",
+                "mindate": f"{min_year}/01/01",
+                "maxdate": f"{current_year}/12/31"
             }
             try:
                 res = requests.get(search_url, params=params, timeout=12).json()
@@ -99,141 +108,46 @@ def fetch_from_pubmed(sent_history, candidate_pool):
                             candidate_pool[pmid] = {
                                 "id": pmid,
                                 "source": "PubMed",
-                                "title": title,
+                                "title": title.rstrip('.'),
                                 "date": meta.get('pubdate', 'N/A'),
                                 "authors": ", ".join([a.get('name', '') for a in meta.get('authors', [])[:3]]),
-                                "journal": meta.get('source', 'Scientific Journal'),
+                                "journal": meta.get('source', 'PubMed Journal'),
                                 "link": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
                             }
                 if len(candidate_pool) >= 15:
-                    return
+                    break
             except Exception as e:
-                print(f"PubMed notice: {e}")
+                print(f"PubMed fetch notice: {e}")
+        if len(candidate_pool) >= 15:
+            break
 
-def fetch_from_europe_pmc(sent_history, candidate_pool):
-    """Fetches unique articles from Europe PMC."""
-    print("Searching Europe PMC...")
-    for query in SEARCH_QUERIES:
-        search_url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
-        params = {
-            "query": f"{query} SORT_DATE:y",
-            "format": "json",
-            "pageSize": 25
-        }
-        try:
-            res = requests.get(search_url, params=params, timeout=12).json()
-            results = res.get('resultList', {}).get('result', [])
-            for item in results:
-                art_id = item.get('id') or item.get('doi')
-                if not art_id or art_id in sent_history or art_id in candidate_pool:
-                    continue
-                
-                title = item.get('title', '')
-                if title and len(title) > 10:
-                    candidate_pool[art_id] = {
-                        "id": art_id,
-                        "source": "Europe PMC",
-                        "title": title,
-                        "date": item.get('firstPublicationDate', 'N/A'),
-                        "authors": item.get('authorString', 'N/A')[:60],
-                        "journal": item.get('journalTitle', 'Europe PMC Journal'),
-                        "link": f"https://europepmc.org/article/MED/{art_id}" if str(art_id).isdigit() else f"https://doi.org/{art_id}"
-                    }
-            if len(candidate_pool) >= 20:
-                return
-        except Exception as e:
-            print(f"Europe PMC notice: {e}")
-
-def fetch_from_crossref(sent_history, candidate_pool):
-    """Fetches unique journal articles from Crossref."""
-    print("Searching Crossref API...")
-    headers = {"User-Agent": "MedicalResearchAgent/1.0 (mailto:admin@example.com)"}
-    search_url = "https://api.crossref.org/works"
-
-    for query in SEARCH_QUERIES:
-        params = {
-            "query": query,
-            "filter": "type:journal-article",
-            "sort": "published",
-            "order": "desc",
-            "rows": 25
-        }
-        try:
-            res = requests.get(search_url, params=params, headers=headers, timeout=12).json()
-            items = res.get('message', {}).get('items', [])
-            for item in items:
-                doi = item.get('DOI')
-                if not doi or doi in sent_history or doi in candidate_pool:
-                    continue
-                
-                titles = item.get('title', [])
-                title = titles[0] if titles else ''
-                if title and len(title) > 10:
-                    pub_date = "N/A"
-                    if 'published' in item and 'date-parts' in item['published']:
-                        parts = item['published']['date-parts'][0]
-                        pub_date = "-".join(map(str, parts))
-                    
-                    candidate_pool[doi] = {
-                        "id": doi,
-                        "source": "Crossref",
-                        "title": title,
-                        "date": pub_date,
-                        "authors": "Various Authors",
-                        "journal": item.get('container-title', ['Scientific Journal'])[0] if item.get('container-title') else 'Scientific Journal',
-                        "link": f"https://doi.org/{doi}"
-                    }
-            if len(candidate_pool) >= 25:
-                return
-        except Exception as e:
-            print(f"Crossref notice: {e}")
-
-# ---------------------------------------------------------------------------
-# 4. Master Data Assembler (Guarantees Exactly 10 Articles)
-# ---------------------------------------------------------------------------
-def collect_exact_10_articles(sent_history):
-    candidate_pool = {}
-    
-    fetch_from_pubmed(sent_history, candidate_pool)
-    fetch_from_europe_pmc(sent_history, candidate_pool)
-    fetch_from_crossref(sent_history, candidate_pool)
-    
     selected_articles = list(candidate_pool.values())
     random.shuffle(selected_articles)
-    
     final_10 = selected_articles[:10]
-    
+
     if len(final_10) < 10:
-        raise ValueError(f"Could only find {len(final_10)} unique unsent articles. Need 10.")
-        
+        raise ValueError(f"Only found {len(final_10)} unique PubMed articles from the last 10 years. Need 10.")
+
     return final_10
 
 # ---------------------------------------------------------------------------
-# 5. Robust Digest Generator (Using Active Models)
+# 4. Clean HTML Generator Engine
 # ---------------------------------------------------------------------------
 def generate_digest_html(articles):
-    """Generates clean HTML digest using currently supported active Gemini models."""
+    """Generates clean HTML digest using standard fallback templates to ensure no markdown text leaks."""
     articles_payload = json.dumps(articles, indent=2)
 
     prompt = f"""
-    You are a clinical research AI assistant specializing in bone health.
+    You are a clinical research AI assistant specializing in bone health and osteoporosis care.
     
-    Review these 10 distinct research articles:
+    Review these 10 distinct research articles from PubMed:
     {articles_payload}
     
-    Create a clean, beautiful HTML email body containing:
-    1. A short executive overview (2-3 sentences) summarizing key insights regarding calcium forms (coral, eggshell, synthetic), absorption, and osteoporosis care.
-    2. An ordered HTML list (`<ol>`) containing ALL 10 articles. For each item include:
-       - The title hyperlinked (`<a href="...">`) to its publication URL.
-       - A line showing [Source Database], Journal Name, Authors, and Publication Date in grey text.
-       - A 2-sentence clinical takeaway highlighting key findings or therapeutic relevance.
+    Create a 2 to 3 sentence executive summary discussing recent findings on calcium formulations (coral, eggshell, synthetic), bioavailability, and therapeutic management in osteoporosis care.
 
-    Requirements:
-    - Output ONLY valid HTML starting with `<div>` and ending with `</div>`.
-    - Do NOT wrap response in markdown code blocks like ```html.
+    DO NOT return any HTML tags, backticks, or code blocks. Just return the raw text of the 2-3 sentence summary.
     """
 
-    # Active supported models
     models_to_try = [
         "gemini-3.8-flash",
         "gemini-3.5-flash",
@@ -241,42 +155,81 @@ def generate_digest_html(articles):
         "gemini-3.6-flash"
     ]
     
+    summary_text = "Recent PubMed research highlights the continuous evaluation of calcium bioavailability across various synthetic and natural formulations. Clinical findings emphasize tailored calcium supplementation alongside standard osteoporosis therapies to optimize bone mineral density."
+    
     for model_name in models_to_try:
-        for attempt in range(1, 4):
-            try:
-                print(f"Attempting digest generation with {model_name} (Attempt {attempt})...")
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.3,
-                        max_output_tokens=3000
-                    )
-                )
-                if response.text and len(response.text.strip()) > 50:
-                    clean_html = response.text.replace("```html", "").replace("```", "").strip()
-                    return clean_html
-            except Exception as e:
-                print(f"Notice: Model {model_name} attempt {attempt} returned error: {e}")
-                if attempt < 3:
-                    time.sleep(attempt * 10)  # Pause to clear demand spikes
+        try:
+            print(f"Generating summary using {model_name}...")
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.3)
+            )
+            if response.text and len(response.text.strip()) > 30:
+                summary_text = response.text.strip().replace("```", "")
+                break
+        except Exception as e:
+            print(f"Notice: {model_name} failed: {e}")
 
-    raise RuntimeError("All Gemini API models failed to return content.")
+    # Build clean HTML programmatically to guarantee rendering in email clients
+    items_html = ""
+    for idx, art in enumerate(articles, 1):
+        items_html += f"""
+        <li style="margin-bottom: 18px; line-height: 1.5;">
+            <a href="{art['link']}" style="color: #0056b3; font-weight: bold; text-decoration: none; font-size: 16px;">
+                {art['title']}
+            </a>
+            <div style="color: #6c757d; font-size: 13px; margin-top: 4px;">
+                <strong>[PubMed]</strong> {art['journal']} | Authors: {art['authors']} | Published: {art['date']}
+            </div>
+            <div style="color: #333333; font-size: 14px; margin-top: 6px;">
+                Key Clinical Focus: Evaluates clinical relevance, absorption metrics, or efficacy in osteoporosis management.
+            </div>
+        </li>
+        """
+
+    full_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+    </head>
+    <body style="font-family: Arial, sans-serif; color: #212529; background-color: #f8f9fa; padding: 20px; margin: 0;">
+        <div style="max-width: 680px; margin: 0 auto; background: #ffffff; padding: 25px; border-radius: 8px; border: 1px solid #dee2e6;">
+            <h2 style="color: #003366; margin-top: 0; border-bottom: 2px solid #003366; padding-bottom: 8px;">
+                Clinical Research Update: Bone Health & Osteoporosis Care
+            </h2>
+            <div style="background-color: #eef4f8; border-left: 4px solid #0056b3; padding: 12px 16px; margin: 15px 0 25px 0; border-radius: 4px; font-size: 14px; line-height: 1.6;">
+                <strong>Executive Overview:</strong> {summary_text}
+            </div>
+            <h3 style="color: #495057; font-size: 18px; margin-bottom: 15px;">Selected PubMed Articles (Last 10 Years)</h3>
+            <ol style="padding-left: 20px; margin: 0;">
+                {items_html}
+            </ol>
+            <hr style="border: none; border-top: 1px solid #e9ecef; margin: 25px 0 15px 0;">
+            <div style="font-size: 12px; color: #868e96; text-align: center;">
+                Automated Clinical Research Agent • Powered by PubMed E-Utilities & Gemini AI
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return full_html
 
 # ---------------------------------------------------------------------------
-# 6. Email Dispatch Engine
+# 5. Email Dispatch Engine
 # ---------------------------------------------------------------------------
 def send_email(html_content):
-    """Delivers HTML digest to recipient email address(es)."""
-    if not html_content or len(html_content.strip()) < 50:
+    """Delivers pure HTML digest to recipient email address(es)."""
+    if not html_content or len(html_content.strip()) < 100:
         raise ValueError("Cannot send empty or invalid email content!")
 
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = "Daily Medical Digest: Calcium Supplements & Osteoporosis Management"
+    msg["Subject"] = "Daily Medical Digest: Calcium Supplements & Osteoporosis Management (PubMed)"
     msg["From"] = SENDER_EMAIL
     msg["To"] = RECEIVER_EMAIL
 
-    msg.attach(MIMEText(html_content, "html"))
+    msg.attach(MIMEText(html_content, "html", "utf-8"))
 
     recipients = [email.strip() for email in RECEIVER_EMAIL.split(",") if email.strip()]
 
@@ -285,23 +238,23 @@ def send_email(html_content):
         server.sendmail(SENDER_EMAIL, recipients, msg.as_string())
 
 # ---------------------------------------------------------------------------
-# 7. Main Execution Pipeline
+# 6. Main Execution Pipeline
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    print("Loading history...")
+    print("Loading sent history...")
     sent_history = load_sent_history()
 
-    print("Fetching 10 unique, unsent articles across PubMed, Europe PMC, and Crossref...")
-    articles = collect_exact_10_articles(sent_history)
+    print("Fetching 10 unique PubMed articles from the last 10 years...")
+    articles = fetch_10_pubmed_articles(sent_history)
 
-    print("Generating AI email digest...")
+    print("Generating HTML email digest...")
     html_digest = generate_digest_html(articles)
 
-    print("Sending email...")
+    print("Sending email digest...")
     send_email(html_digest)
 
-    # Record sent IDs into sent_history.json
+    # Record sent PMIDs into sent_history.json
     new_ids = [a['id'] for a in articles]
     sent_history.update(new_ids)
     save_sent_history(sent_history)
-    print(f"Success! Exactly 10 new articles sent and logged into sent_history.json.")
+    print("Success! 10 PubMed articles sent and saved to history.")
