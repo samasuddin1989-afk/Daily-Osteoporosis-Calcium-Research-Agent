@@ -2,7 +2,7 @@ name: Daily Medical Research Agent
 
 on:
   schedule:
-    # 10:00 UTC = 05:00 PM Bangladesh Standard Time (GMT+6)
+    # 11:00 UTC = 05:00 PM Bangladesh Standard Time (GMT+6)
     - cron: '00 11 * * *'
   workflow_dispatch:
 
