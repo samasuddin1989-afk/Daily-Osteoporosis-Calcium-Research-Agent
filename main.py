@@ -209,10 +209,10 @@ def collect_exact_10_articles(sent_history):
     return final_10
 
 # ---------------------------------------------------------------------------
-# 5. Robust Digest Generator with Retries & Fallback (Fixes 503 Errors)
+# 5. Robust Digest Generator with Retries & Active Models
 # ---------------------------------------------------------------------------
 def generate_digest_html(articles):
-    """Generates clean HTML digest with automatic retry handling for 503 high-demand errors."""
+    """Generates clean HTML digest with active fallback models and exponential retry delays."""
     articles_payload = json.dumps(articles, indent=2)
 
     prompt = f"""
@@ -233,7 +233,12 @@ def generate_digest_html(articles):
     - Do NOT wrap response in markdown code blocks like ```html.
     """
 
-    models_to_try = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
+    # Valid active Gemini models
+    models_to_try = [
+        "gemini-3.6-flash",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro"
+    ]
     
     for model_name in models_to_try:
         for attempt in range(1, 4):
@@ -252,7 +257,8 @@ def generate_digest_html(articles):
             except Exception as e:
                 print(f"Notice: Model {model_name} attempt {attempt} returned: {e}")
                 if attempt < 3:
-                    time.sleep(5)  # Pause 5s to allow API server demand spikes to settle
+                    sleep_time = attempt * 12  # Exponential backoff (12s, 24s)
+                    time.sleep(sleep_time)
 
     raise RuntimeError("All Gemini models are currently busy. Please retry in a few minutes.")
 
