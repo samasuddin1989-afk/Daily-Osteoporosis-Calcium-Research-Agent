@@ -9,7 +9,7 @@ from google import genai
 from google.genai import types
 
 # ---------------------------------------------------------------------------
-# 1. Configuration & Environment Setup
+# 1. Configuration & Setup
 # ---------------------------------------------------------------------------
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
@@ -17,36 +17,35 @@ GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 RECEIVER_EMAIL = os.environ.get("RECEIVER_EMAIL")
 
 if not all([GEMINI_API_KEY, SENDER_EMAIL, GMAIL_APP_PASSWORD, RECEIVER_EMAIL]):
-    raise ValueError("Missing required environment variables! Check GitHub Secrets.")
+    raise ValueError("Missing required environment variables in GitHub Secrets!")
 
 HISTORY_FILE = "sent_history.json"
 
-# Initialize official Google GenAI Client
+# Initialize Google GenAI Client
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ---------------------------------------------------------------------------
-# 2. History & De-duplication Engine
+# 2. Sent History Engine
 # ---------------------------------------------------------------------------
 def load_sent_history():
-    """Loads previously sent article IDs/DOIs from history."""
+    """Loads previously sent article IDs/DOIs from history file."""
     if os.path.exists(HISTORY_FILE):
         try:
             with open(HISTORY_FILE, "r", encoding="utf-8") as f:
                 return set(json.load(f))
         except Exception as e:
-            print(f"Warning: Could not parse history file: {e}")
+            print(f"Warning reading history: {e}")
             return set()
     return set()
 
 def save_sent_history(history_set):
-    """Saves updated sent IDs back to disk."""
+    """Saves updated history back to repository."""
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(list(history_set), f, indent=2)
 
 # ---------------------------------------------------------------------------
-# 3. Multi-Source Ingestion Engines (PubMed, Europe PMC, Crossref)
+# 3. Multi-Repository Ingestion Engine
 # ---------------------------------------------------------------------------
-
 SEARCH_QUERIES = [
     "calcium supplementation osteoporosis management",
     "coral calcium OR eggshell calcium OR synthetic calcium",
@@ -58,10 +57,14 @@ SEARCH_QUERIES = [
 ]
 
 def fetch_from_pubmed(sent_history, candidate_pool):
-    """Fetches unique research papers from PubMed."""
+    """Fetches unique articles from PubMed with dynamic offset pagination."""
     print("Searching PubMed...")
-    for query in SEARCH_QUERIES:
-        for offset in range(0, 150, 25): # Step through older articles if top results are sent
+    random_queries = list(SEARCH_QUERIES)
+    random.shuffle(random_queries)
+
+    for query in random_queries:
+        # Step through older pages if recent ones are already in history
+        for offset in range(0, 200, 25):
             search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
             params = {
                 "db": "pubmed",
@@ -105,10 +108,10 @@ def fetch_from_pubmed(sent_history, candidate_pool):
                 if len(candidate_pool) >= 15:
                     return
             except Exception as e:
-                print(f"PubMed fetch notice: {e}")
+                print(f"PubMed notice: {e}")
 
 def fetch_from_europe_pmc(sent_history, candidate_pool):
-    """Fetches unique research papers from Europe PMC."""
+    """Fetches unique articles from Europe PMC."""
     print("Searching Europe PMC...")
     for query in SEARCH_QUERIES:
         search_url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
@@ -134,17 +137,17 @@ def fetch_from_europe_pmc(sent_history, candidate_pool):
                         "date": item.get('firstPublicationDate', 'N/A'),
                         "authors": item.get('authorString', 'N/A')[:60],
                         "journal": item.get('journalTitle', 'Europe PMC Journal'),
-                        "link": f"https://europepmc.org/article/MED/{art_id}" if art_id.isdigit() else f"https://doi.org/{art_id}"
+                        "link": f"https://europepmc.org/article/MED/{art_id}" if str(art_id).isdigit() else f"https://doi.org/{art_id}"
                     }
             if len(candidate_pool) >= 20:
                 return
         except Exception as e:
-            print(f"Europe PMC fetch notice: {e}")
+            print(f"Europe PMC notice: {e}")
 
 def fetch_from_crossref(sent_history, candidate_pool):
-    """Fetches unique journal articles from Crossref REST API."""
+    """Fetches unique journal articles from Crossref."""
     print("Searching Crossref API...")
-    headers = {"User-Agent": "MedicalDigestAgent/1.0 (mailto:admin@example.com)"}
+    headers = {"User-Agent": "MedicalResearchAgent/1.0 (mailto:admin@example.com)"}
     for query in SEARCH_QUERIES:
         search_url = "https://api.crossref.org/works"
         params = {
@@ -182,49 +185,47 @@ def fetch_from_crossref(sent_history, candidate_pool):
             if len(candidate_pool) >= 25:
                 return
         except Exception as e:
-            print(f"Crossref fetch notice: {e}")
+            print(f"Crossref notice: {e}")
 
 # ---------------------------------------------------------------------------
-# 4. Collection Master Pipeline (Ensures exactly 10 articles)
+# 4. Master Data Assembler (Guarantees Exactly 10 Articles)
 # ---------------------------------------------------------------------------
 def collect_exact_10_articles(sent_history):
     candidate_pool = {}
     
-    # Ingest from all 3 sources
     fetch_from_pubmed(sent_history, candidate_pool)
     fetch_from_europe_pmc(sent_history, candidate_pool)
     fetch_from_crossref(sent_history, candidate_pool)
     
     selected_articles = list(candidate_pool.values())
-    
-    # Shuffle slightly so sources mix well, then slice exact 10
     random.shuffle(selected_articles)
+    
     final_10 = selected_articles[:10]
     
     if len(final_10) < 10:
-        raise ValueError(f"Could not gather 10 articles. Only found {len(final_10)}. Pipeline halted.")
+        raise ValueError(f"Could only find {len(final_10)} unique unsent articles. Need 10.")
         
     return final_10
 
 # ---------------------------------------------------------------------------
-# 5. Digest Generation via Gemini 3.6 Flash
+# 5. Gemini 3.6 Flash Email Generator
 # ---------------------------------------------------------------------------
 def generate_digest_html(articles):
-    """Generates clean HTML digest using Google GenAI SDK."""
+    """Generates structured HTML digest using Gemini 3.6 Flash."""
     articles_payload = json.dumps(articles, indent=2)
 
     prompt = f"""
-    You are a clinical research AI assistant specializing in endocrinology, rheumatology, and bone health.
+    You are a clinical research AI assistant specializing in bone health.
     
-    Review these 10 articles retrieved from multiple scientific databases (PubMed, Europe PMC, Crossref):
+    Review these 10 distinct research articles:
     {articles_payload}
     
-    Create a clean, beautiful HTML email body:
-    1. A short executive overview (2-3 sentences) on current findings across calcium forms (coral, eggshell, synthetic), supplementation efficacy, and osteoporosis care.
+    Create a clean, beautiful HTML email body containing:
+    1. A short executive overview (2-3 sentences) summarizing key insights regarding calcium forms (coral, eggshell, synthetic), absorption, and osteoporosis care.
     2. An ordered HTML list (`<ol>`) containing ALL 10 articles. For each item include:
        - The title hyperlinked (`<a href="...">`) to its publication URL.
-       - A line showing [Source Database], Journal, Authors, and Date in muted grey text.
-       - A 2-sentence clinical takeaway highlighting key findings and therapeutic relevance.
+       - A line showing [Source Database], Journal Name, Authors, and Publication Date in grey text.
+       - A 2-sentence clinical takeaway highlighting key findings or therapeutic relevance.
 
     Requirements:
     - Output ONLY valid HTML starting with `<div>` and ending with `</div>`.
@@ -247,9 +248,9 @@ def generate_digest_html(articles):
 # 6. Email Dispatch Engine
 # ---------------------------------------------------------------------------
 def send_email(html_content):
-    """Sends HTML email digest to listed recipients."""
+    """Delivers HTML digest to recipient email address(es)."""
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = "Daily Medical Digest: Calcium & Osteoporosis Research (10 Articles)"
+    msg["Subject"] = "Daily Medical Digest: Calcium Supplements & Osteoporosis Management"
     msg["From"] = SENDER_EMAIL
     msg["To"] = RECEIVER_EMAIL
 
@@ -268,17 +269,17 @@ if __name__ == "__main__":
     print("Loading history...")
     sent_history = load_sent_history()
 
-    print("Gathering 10 unique articles from PubMed, Europe PMC, and Crossref...")
+    print("Fetching 10 unique, unsent articles across PubMed, Europe PMC, and Crossref...")
     articles = collect_exact_10_articles(sent_history)
 
-    print("Generating AI digest with gemini-3.6-flash...")
+    print("Generating AI email digest with gemini-3.6-flash...")
     html_digest = generate_digest_html(articles)
 
     print("Sending email...")
     send_email(html_digest)
 
-    # Record all 10 new IDs into history
+    # Record sent IDs into sent_history.json
     new_ids = [a['id'] for a in articles]
     sent_history.update(new_ids)
     save_sent_history(sent_history)
-    print(f"Success! 10 articles sent and history updated with {len(new_ids)} new entries.")
+    print(f"Success! Exactly 10 new articles sent and logged into sent_history.json.")
